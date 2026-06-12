@@ -53,6 +53,18 @@ int disassembleInstruction(const Chunk& chunk, int offset)
               << std::setfill(' ')
               << ' ';
 
+    if (offset > 0 && chunk.lines[offset] == chunk.lines[offset - 1])
+    {
+        std::cout << "   | ";
+    }
+    else
+    {
+        std::cout
+        << std::setw(4)
+        << chunk.lines[offset]
+        << ' ';
+    }
+
     auto instruction = static_cast<OpCode>(chunk.code[offset]);
 
     switch (instruction) {

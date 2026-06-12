@@ -12,8 +12,9 @@ enum OpCode {
 struct Chunk
 {
     std::vector<std::uint8_t> code;
+    std::vector<int> lines;
     ValueArray constants;
 };
 
-void writeChunk(Chunk& chunk, std::uint8_t byte);
+void writeChunk(Chunk& chunk, std::uint8_t byte, int line);
 int addConstant(Chunk& chunk, Value value);
