@@ -1,2 +1,12 @@
-randoms/
+# Object files
+*.o
+src/*.o
+
+# Executable
 src/cpplox
+
+# macOS
+.DS_Store
+
+#personal shit
+randoms/
