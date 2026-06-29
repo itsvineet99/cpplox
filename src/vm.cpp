@@ -1,13 +1,12 @@
 #include "common.hpp"
+#include "compiler.hpp"
 #include "debug.hpp"
 #include "vm.hpp"
 
-InterpretResult VM::interpret(Chunk& chunk)
+InterpretResult VM::interpret(const std::string& source)
 {
-    this->chunk = &chunk;
-    this->ip = 0;
-
-    return run();
+    compile(source);
+    return INTERPRET_OK;
 }
 
 std::uint8_t VM::readByte()

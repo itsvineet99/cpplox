@@ -13,7 +13,7 @@ enum InterpretResult
 class VM
 {
 public: 
-    InterpretResult interpret(Chunk& chunk);
+    InterpretResult interpret(const std::string& source);
 
 private:
     InterpretResult run();
