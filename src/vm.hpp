@@ -32,4 +32,3 @@ private:
     std::size_t ip = 0;
     std::vector<Value> stack;
 };
-

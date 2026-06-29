@@ -20,6 +20,11 @@ Value VM::readConstant()
     return chunk->constants.values[readByte()];
 }
 
+void VM::resetStack()
+{
+    stack.clear();
+}
+
 void VM::push (Value value)
 {
     stack.push_back(value);
@@ -106,9 +111,4 @@ InterpretResult VM::run()
             }
         }
     }
-}
-
-void VM::resetStack()
-{
-    stack.clear();
 }
