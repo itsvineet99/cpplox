@@ -92,7 +92,8 @@ Token Scanner::string()
     return makeToken(TOKEN_STRING);
 }
 
-bool Scanner::isDigit(char c) {
+bool Scanner::isDigit(char c) 
+{
     return c >= '0' && c <= '9';
 }
 

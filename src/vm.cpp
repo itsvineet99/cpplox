@@ -5,8 +5,19 @@
 
 InterpretResult VM::interpret(const std::string& source)
 {
-    compile(source);
-    return INTERPRET_OK;
+    Chunk chunk;
+
+    if (!compile(source, chunk))
+    {
+        return INTERPRET_COMPILE_ERROR;
+    }
+
+    this->chunk = &chunk;
+    this->ip = 0;
+
+    InterpretResult result = run();
+
+    return result;
 }
 
 std::uint8_t VM::readByte()
