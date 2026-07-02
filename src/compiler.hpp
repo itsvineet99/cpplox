@@ -1,5 +1,10 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <string>
+#include <string_view>
+
 #include "chunk.hpp"
 #include "common.hpp"
 #include "scanner.hpp"
@@ -18,54 +23,60 @@ enum Precedence {
     PREC_PRIMARY
 };
 
+struct Parser {
+    Token current;
+    Token previous;
+    bool hadError = false;
+    bool panicMode = false;
+};
 
-class Parser
-{
+class Compiler {
 public:
-    explicit Parser(Scanner& scanner, Chunk& chunk);
+    using ParseFn = void (Compiler::*)(bool canAssign);
+
+    struct ParseRule {
+        ParseFn prefix;
+        ParseFn infix;
+        Precedence precedence;
+    };
+
+    explicit Compiler(Scanner& scanner, Chunk* chunk);
 
     bool compile();
 
 private:
-    Scanner& scanner;
+    Parser currentParser;   // State object for tokens and errors
+    Scanner& scanner;       // Reference to tokenizer
+    Chunk* compilingChunk;  // Pointer to the chunk being emitted to
 
-    Token current;
-    Token previous;
-    Chunk& compilingChunk;
-
-    bool hadError = false;
-    bool panicMode = false;
-
+    // Core parsing and tokens
     void advance();
+    void consume(TokenType type, std::string_view message);
+    void parsePrecedence(Precedence precedence);
+    
+    // Error handling (modifies currentParser state)
     void errorAtCurrent(std::string_view message);
     void error(std::string_view message);
     void errorAt(const Token& token, std::string_view message);
-    void consume(TokenType type, std::string_view message);
+
+    // Bytecode emission
     void emitByte(std::uint8_t byte);
-    void emitBytes(uint8_t byte1, uint8_t byte2);
-    Chunk& currentChunk();
+    void emitBytes(std::uint8_t byte1, std::uint8_t byte2);
     void emitReturn();
-    void endCompiler();
-    void number();
     void emitConstant(Value value);
     std::uint8_t makeConstant(Value value);
-    void grouping();
-    void unary();
-    void parsePrecedence(Precedence precedence);
-    void binary();
+    Chunk* currentChunk();
+    void endCompiler();
+
+    // Pratt parser functions matching the ParseFn signature
+    void expression();
+    void number(bool canAssign);
+    void grouping(bool canAssign);
+    void unary(bool canAssign);
+    void binary(bool canAssign);
 
     static const std::array<ParseRule, TOKEN_EOF + 1> rules;
+    
     const ParseRule& getRule(TokenType type) const;
 };
 
-
-using ParseFn = void (Parser::*)();
-
-struct ParseRule
-{
-    ParseFn prefix;
-    ParseFn infix;
-    Precedence precedence;
-};
-
-bool compile(const std::string& source, Chunk& chunk);

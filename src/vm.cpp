@@ -6,8 +6,10 @@
 InterpretResult VM::interpret(const std::string& source)
 {
     Chunk chunk;
+    Scanner scanner(source);
+    Compiler compiler(scanner, &chunk);
 
-    if (!compile(source, chunk))
+    if (!compiler.compile())
     {
         return INTERPRET_COMPILE_ERROR;
     }

@@ -1,23 +1,33 @@
-#include <iostream>
-#include <iomanip>
-#include <limits>
+#include <array>
 
 #include "common.hpp"
-#include "chunk.hpp"
 #include "compiler.hpp"
-#include "scanner.hpp"
+#include "debug.hpp"
 
 
-Parser::Parser(Scanner& scanner, Chunk& chunk)
-    : scanner(scanner),
+Compiler::Compiler(Scanner& scanner, Chunk* chunk)
+    : currentParser{},
+      scanner(scanner),
       compilingChunk(chunk)
 {
 }
 
-void Parser::errorAt(const Token& token, std::string_view message)
+// parsing related
+
+void Compiler::consume (TokenType type, std::string_view message)
 {
-    if (panicMode) return;
-    panicMode = true;
+    if (currentParser.current.type == type)
+    {
+        advance();
+        return;
+    }
+    errorAtCurrent(message);
+}
+
+void Compiler::errorAt(const Token& token, std::string_view message)
+{
+    if (currentParser.panicMode) return;
+    currentParser.panicMode = true;
 
     std::cerr << "[line " << token.line << "] Error";
 
@@ -36,122 +46,145 @@ void Parser::errorAt(const Token& token, std::string_view message)
 
     std::cerr << ": " << message << '\n';
 
-    hadError = true;
+    currentParser.hadError = true;
 }
 
-void Parser::errorAtCurrent(std::string_view message) 
+void Compiler::errorAtCurrent(std::string_view message) 
 {
-    errorAt(current, message);
+    errorAt(currentParser.current, message);
 }
 
-void Parser::error(std::string_view message) 
+void Compiler::error(std::string_view message) 
 {
-    errorAt(previous, message);
+    errorAt(currentParser.previous, message);
 }
 
-void Parser::advance ()
+void Compiler::advance ()
 {
-    previous = current;
+    currentParser.previous = currentParser.current;
     
     while(true)
     {
-        current = scanner.scanToken();
-        if (current.type != TOKEN_ERROR) break;
-        errorAtCurrent(current.lexeme);
+        currentParser.current = scanner.scanToken();
+        if (currentParser.current.type != TOKEN_ERROR) break;
+        errorAtCurrent(currentParser.current.lexeme);
     }
 }
 
-void Parser::consume(TokenType type, std::string_view message) 
+const std::array<Compiler::ParseRule, TOKEN_EOF + 1> Compiler::rules = {{
+    { &Compiler::grouping, nullptr,            PREC_NONE   }, // TOKEN_LEFT_PAREN
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_RIGHT_PAREN
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_LEFT_BRACE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_RIGHT_BRACE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_COMMA
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_DOT
+    { &Compiler::unary,    &Compiler::binary,  PREC_TERM   }, // TOKEN_MINUS
+    { nullptr,             &Compiler::binary,  PREC_TERM   }, // TOKEN_PLUS
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_SEMICOLON
+    { nullptr,             &Compiler::binary,  PREC_FACTOR }, // TOKEN_SLASH
+    { nullptr,             &Compiler::binary,  PREC_FACTOR }, // TOKEN_STAR
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_BANG
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_BANG_EQUAL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_EQUAL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_EQUAL_EQUAL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_GREATER
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_GREATER_EQUAL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_LESS
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_LESS_EQUAL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_IDENTIFIER
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_STRING
+    { &Compiler::number,   nullptr,            PREC_NONE   }, // TOKEN_NUMBER
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_AND
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_CLASS
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_ELSE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_FALSE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_FOR
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_FUN
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_IF
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_NIL
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_OR
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_PRINT
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_RETURN
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_SUPER
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_THIS
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_TRUE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_VAR
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_WHILE
+    { nullptr,             nullptr,            PREC_NONE   }, // TOKEN_ERROR
+    { nullptr,             nullptr,            PREC_NONE   }  // TOKEN_EOF
+}};
+
+const Compiler::ParseRule& Compiler::getRule(TokenType type) const
 {
-    if (current.type == type) {
-        advance();
+    return rules[type];
+}
+
+void Compiler::parsePrecedence(Precedence precedence)
+{
+    advance();
+
+    ParseFn prefixRule = getRule(currentParser.previous.type).prefix;
+
+    if (prefixRule == nullptr)
+    {
+        error("Expect expression.");
         return;
     }
-    errorAtCurrent(message);
-}
 
-Chunk& Parser::currentChunk()
-{
-    return compilingChunk;
-}
+    bool canAssign = precedence <= PREC_ASSIGNMENT;
 
-void Parser::emitByte(std::uint8_t byte)
-{
-    writeChunk(currentChunk(), byte, previous.line);
-}
+    (this->*prefixRule)(canAssign);
 
-void Parser::emitBytes(uint8_t byte1, uint8_t byte2) 
-{
-    emitByte(byte1);
-    emitByte(byte2);
-}
-
-void Parser::emitReturn () 
-{
-    emitByte(OP_RETURN);
-}
-
-void Parser::endCompiler() 
-{
-    emitReturn();
-}
-
-// some ambiguous code (i do not understand how to arrange it).
-// emiting part
-
-void Parser::number()
-{
-    double value = std::stod(std::string(previous.lexeme));
-    emitConstant(value);
-}
-
-void Parser::emitConstant(Value value) 
-{
-    emitBytes(OP_CONSTANT, makeConstant(value));
-}
-
-std::uint8_t Parser::makeConstant(Value value)
-{
-    int constant = addConstant(currentChunk(), value);
-
-    if (constant > std::numeric_limits<std::uint8_t>::max())
+    while (precedence <= getRule(currentParser.current.type).precedence)
     {
-        error("Too many constants in one chunk.");
-        return 0;
+        advance();
+        ParseFn infixRule = getRule(currentParser.previous.type).infix;
+        
+        (this->*infixRule)(canAssign);
     }
 
-    return static_cast<std::uint8_t>(constant);
+    if (canAssign && currentParser.current.type == TOKEN_EQUAL)
+    {
+        advance(); 
+        error("Invalid assignment target.");
+    }
 }
 
-void Parser::grouping() {
+void Compiler::expression()
+{
+    parsePrecedence(PREC_ASSIGNMENT);
+}
+
+// functions to call when tokentype is matched
+
+void Compiler::grouping (bool canAssign)
+{
     expression();
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
 
-void Parser::unary() {
-    TokenType operatorType = previous.type;
-
-    expression();
+void Compiler::unary (bool canAssign) 
+{
+    TokenType operatorType = currentParser.previous.type;
 
     parsePrecedence(PREC_UNARY);
 
-    switch (operatorType) {
+    switch (operatorType) 
+    {
         case TOKEN_MINUS: emitByte(OP_NEGATE); break;
-        default:
-        return; 
+        default: return; 
     }
 }
 
-void Parser::binary()
+void Compiler::binary(bool canAssign)
 {
-    // Remember the operator.
-    TokenType operatorType = previous.type;
+    TokenType operatorType = currentParser.previous.type;
 
-    // Compile the right operand.
-    ParseRule* rule = getRule(operatorType);
-    parsePrecedence(static_cast<Precedence>(rule->precedence + 1));
+    ParseFn rule = getRule(operatorType).infix;
+    Precedence prec = getRule(operatorType).precedence;
 
-    // Emit the operator instruction.
+    parsePrecedence(static_cast<Precedence>(prec + 1));
+
     switch (operatorType)
     {
         case TOKEN_PLUS:
@@ -175,96 +208,68 @@ void Parser::binary()
     }
 }
 
-// abe ye kya bkchodi hai?/???????
-
-#include <array>
-
-const std::array<ParseRule, TOKEN_EOF + 1> Parser::rules = {{
-    { &Parser::grouping, nullptr,          PREC_NONE   }, // TOKEN_LEFT_PAREN
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_RIGHT_PAREN
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_LEFT_BRACE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_RIGHT_BRACE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_COMMA
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_DOT
-    { &Parser::unary,    &Parser::binary,  PREC_TERM   }, // TOKEN_MINUS
-    { nullptr,           &Parser::binary,  PREC_TERM   }, // TOKEN_PLUS
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_SEMICOLON
-    { nullptr,           &Parser::binary,  PREC_FACTOR }, // TOKEN_SLASH
-    { nullptr,           &Parser::binary,  PREC_FACTOR }, // TOKEN_STAR
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_BANG
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_BANG_EQUAL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_EQUAL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_EQUAL_EQUAL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_GREATER
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_GREATER_EQUAL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_LESS
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_LESS_EQUAL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_IDENTIFIER
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_STRING
-    { &Parser::number,   nullptr,          PREC_NONE   }, // TOKEN_NUMBER
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_AND
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_CLASS
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_ELSE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_FALSE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_FOR
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_FUN
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_IF
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_NIL
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_OR
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_PRINT
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_RETURN
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_SUPER
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_THIS
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_TRUE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_VAR
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_WHILE
-    { nullptr,           nullptr,          PREC_NONE   }, // TOKEN_ERROR
-    { nullptr,           nullptr,          PREC_NONE   }  // TOKEN_EOF
-}};
-
-
- const ParseRule& Parser::getRule(TokenType type) const
+void Compiler::number (bool canAssign)
 {
-    return rules[type];
+    double value = std::stod(std::string(currentParser.previous.lexeme));
+    emitConstant(value);
 }
 
-void Parser::parsePrecedence(Precedence precedence)
+// emiting shii / bytecode generation
+
+Chunk* Compiler::currentChunk() 
 {
-    advance();
+    return compilingChunk;
+}
 
-    ParseFn prefixRule = getRule(previous.type).prefix;
+std::uint8_t Compiler::makeConstant(Value value)
+{
+    int constant = addConstant(*currentChunk(), value);
 
-    if (prefixRule == nullptr)
+    if (constant > std::numeric_limits<std::uint8_t>::max())
     {
-        error("Expect expression.");
-        return;
+        error("Too many constants in one chunk.");
+        return 0;
     }
 
-    (this->*prefixRule)();
-
-    while (precedence <= getRule(current.type).precedence) {
-    advance();
-    ParseFn infixRule = getRule(previous.type).infix;
-    (this->*infixRule) ();
-    
+    return static_cast<std::uint8_t>(constant);
 }
 
-// the heart / engine of this module
+void Compiler::emitConstant (Value value)
+{
+    emitBytes(OP_CONSTANT, makeConstant(value));
+}
 
-bool Parser::compile()
+void Compiler::emitByte(std::uint8_t byte) 
+{
+    writeChunk(*currentChunk(), byte, currentParser.previous.line);
+}
+void Compiler::emitBytes(std::uint8_t byte1, std::uint8_t byte2) 
+{
+    emitByte(byte1);
+    emitByte(byte2);
+}
+
+void Compiler::emitReturn () 
+{
+    emitByte(OP_RETURN);
+}
+
+void Compiler::endCompiler() 
+{
+    emitReturn();
+#ifdef DEBUG_PRINT_CODE
+    if (!currentParser.hadError) {
+        disassembleChunk(*currentChunk(), "code");
+    }
+#endif
+}
+
+bool Compiler::compile()
 {
     advance();
     expression();
     consume(TOKEN_EOF, "Expect end of expression.");
 
     endCompiler();
-    return !hadError;
-}
-
-bool compile(const std::string& source, Chunk& chunk)
-{
-    Scanner scanner(source);
-    Parser parser(scanner, chunk);
-
-    return parser.compile();
+    return !currentParser.hadError;
 }
